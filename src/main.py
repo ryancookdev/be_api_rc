@@ -1,17 +1,24 @@
 import argparse
 import csv
+import json
 import os
 import time
 import threading
 from domain.Person import Person
 from domain.UniqueQueue import UniqueQueue
 
+parser = argparse.ArgumentParser(description='Convert CSV to JSON')
+parser.add_argument('-i', '--input-dir', default='input', help='Name of the input directory')
+parser.add_argument('-o', '--output-dir', default='output', help='Name of the output directory')
+parser.add_argument('-e', '--error-dir', default='error', help='Name of the error directory')
+parser.add_argument('-w', '--wait', type=int, default=15, help='Name of the error directory')
+args = parser.parse_args()
+# TODO: validate arguments
+
 queue = UniqueQueue()
+max_threads = 5
 
 def main():
-    args = get_args()
-
-    max_threads = 5
     for i in range(max_threads):
         print(f'Creating {max_threads} thread(s)')
         t = threading.Thread(target=worker)
@@ -20,10 +27,10 @@ def main():
 
     while True:
         print('Loading queue. Initial size: ' + str(queue.qsize()))
-        files = [f for f in os.listdir(args.input_dir)]
-        for file in files:
-            queue.put(os.path.join(args.input_dir, file))
-            print(f'Added to queue: {file}')
+        filenames = [f for f in os.listdir(args.input_dir)]
+        for filename in filenames:
+            queue.put(filename)
+            print(f'Added to queue: {filename}')
         print('Queue loaded. Size: ' + str(queue.qsize()))
         time.sleep(args.wait)
 
@@ -36,31 +43,35 @@ def worker():
             continue
         filename = queue.get()
         print(f'Worker processing: {filename}')
-        process_input_file(filename)
+        json = process_csv_file(filename)
+        write_json_file(filename, json)
         queue.task_done(filename)
 
 
-def process_input_file(file):
-    with open(file) as csv_file:
-        csv_reader = csv.reader(csv_file, delimiter=',')
-        next(csv_reader) # skip header
-        for row in csv_reader:
-            person = Person(row[0], row[1], row[2], row[3], row[4])
-        time.sleep(1)
-
+def process_csv_file(filename):
     # TODO: validate input dir exists
     # TODO: validate file ends with .csv
     # TODO: create output/error if they don't exist
 
+    data = []
+    with open(os.path.join(args.input_dir, filename)) as csv_file:
+        csv_reader = csv.DictReader(csv_file)
+        for row in csv_reader:
+            # person = Person(row['INTERNAL_ID'], row['FIRST_NAME'], row['MIDDLE_NAME'], row['LAST_NAME'], row['PHONE_NUM'])
+            person = {}
+            person['id'] = row['INTERNAL_ID']
+            person['name'] = {}
+            person['name']['first'] = row['FIRST_NAME']
+            person['name']['middle'] = row['MIDDLE_NAME']
+            person['name']['last'] = row['LAST_NAME']
+            person['phone'] = row['PHONE_NUM']
+            data.append(person)
+    return data
 
-def get_args():
-    parser = argparse.ArgumentParser(description='Convert CSV to JSON')
-    parser.add_argument('-i', '--input-dir', default='input', help='Name of the input directory')
-    parser.add_argument('-o', '--output-dir', default='output', help='Name of the output directory')
-    parser.add_argument('-e', '--error-dir', default='error', help='Name of the error directory')
-    parser.add_argument('-w', '--wait', type=int, default=15, help='Name of the error directory')
-    # TODO: validate arguments
-    return parser.parse_args()
+
+def write_json_file(filename, data):
+    with open(os.path.join(args.output_dir, filename), 'w') as json_file:
+        json_file.write(json.dumps(data, indent=4))
 
 
 if __name__ == "__main__":
