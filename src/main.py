@@ -1,12 +1,11 @@
 import argparse
 import csv
 import json
+import multiprocessing
 import os
 import time
-# import threading
-import multiprocessing
-from domain.Person import Person
-from domain.UniqueQueue import UniqueQueue
+from UniqueQueue import UniqueQueue
+from Person import Person
 
 parser = argparse.ArgumentParser(description='Convert CSV to JSON')
 parser.add_argument('-i', '--input-dir', default='input',
@@ -15,10 +14,10 @@ parser.add_argument('-o', '--output-dir', default='output',
                     help='Name of the output directory')
 parser.add_argument('-e', '--error-dir', default='error',
                     help='Name of the error directory')
-parser.add_argument('-w', '--wait', type=int, default=15,
+parser.add_argument('-p', '--polling', type=int, default=10,
                     help='Delay in seconds for polling the input directory')
-parser.add_argument('-t', '--threads', type=int, default=1,
-                    help='Number of threads for processing input files')
+parser.add_argument('-w', '--workers', type=int, default=1,
+                    help='Number of workers for processing input files')
 parser.add_argument('-v', '--verbosity', action='store_true',
                     help='Print processing steps')
 args = parser.parse_args()
@@ -30,7 +29,7 @@ def main():
     create_workers()
     while True:
         load_queue()
-        time.sleep(args.wait)
+        time.sleep(args.polling)
 
 
 def verify_directories():
@@ -43,23 +42,26 @@ def verify_directories():
 
 
 def create_workers():
-    log(f'Creating {args.threads} thread(s)')
-    for i in range(args.threads):
-        t = multiprocessing.Process(target=worker, args=(queue, )) 
-        # t = threading.Thread(target=worker)
-        t.start()
+    log(f'Creating {args.workers} worker(s)')
+    for i in range(args.workers):
+        w = multiprocessing.Process(target=worker, args=(queue, )) 
+        w.start()
 
 
 def worker(queue):
     while True:
         if queue.empty():
-            log('Waiting for work...')
             time.sleep(2)
             continue
         filename = queue.get()
         log(f'Processing: {filename}')
-        json = process_csv_file(filename)
-        write_json_file(filename, json)
+        result = process_csv_file(filename)
+        people = result[0]
+        errors = result[1]
+        if len(people):
+            write_json_file(filename, people)
+        if len(errors):
+            write_error_file(filename, errors)
         os.remove(os.path.join(args.input_dir, filename))
         queue.task_done(filename)
         log(f'Completed: {filename}')
@@ -75,28 +77,50 @@ def load_queue():
 
 
 def process_csv_file(filename):
-    data = []
+    people = []
+    errors = []
     with open(os.path.join(args.input_dir, filename)) as csv_file:
-        csv_reader = csv.DictReader(csv_file)
-        for row in csv_reader:
-            # TODO: validate CSV data
-            # person = Person(row['INTERNAL_ID'], row['FIRST_NAME'], row['MIDDLE_NAME'], row['LAST_NAME'], row['PHONE_NUM'])
-            person = {}
-            person['id'] = row['INTERNAL_ID']
-            person['name'] = {}
-            person['name']['first'] = row['FIRST_NAME']
-            if row['MIDDLE_NAME']:
-                person['name']['middle'] = row['MIDDLE_NAME']
-            person['name']['last'] = row['LAST_NAME']
-            person['phone'] = row['PHONE_NUM']
-            data.append(person)
-    return data
+        reader = csv.DictReader(csv_file)
+        row_id = 0
+        for row in reader:
+            row_id += 1
+            try:
+                person = Person(
+                    row['INTERNAL_ID'],
+                    row['FIRST_NAME'],
+                    row['MIDDLE_NAME'],
+                    row['LAST_NAME'],
+                    row['PHONE_NUM'])
+                people.append(person)
+            except Exception as e:
+                errors.append((row_id, e))
+    return (people, errors)
 
 
-def write_json_file(filename, data):
+def write_json_file(filename, people):
     json_filename = filename.replace('.csv', '.json')
     with open(os.path.join(args.output_dir, json_filename), 'w') as json_file:
-        json_file.write(json.dumps(data, indent=4))
+        people_json = []
+        for person in people:
+            person_json = {}
+            person_json['id'] = person.internal_id
+            person_json['name'] = {}
+            person_json['name']['first'] = person.first_name
+            if person.middle_name:
+                person_json['name']['middle'] = person.middle_name
+            person_json['name']['last'] = person.last_name
+            person_json['phone'] = person.phone
+            people_json.append(person_json)
+        json_file.write(json.dumps(people_json, indent=4))
+
+
+def write_error_file(filename, errors):
+    with open(os.path.join(args.error_dir, filename), 'w') as error_file:
+        writer = csv.writer(error_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        for error in errors:
+            row_number = error[0]
+            error_message = error[1]
+            writer.writerow([row_number, error_message])
 
 
 def log(message):
